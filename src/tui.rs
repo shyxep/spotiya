@@ -914,7 +914,7 @@ impl AddonMenu {
                 addon.name
             ));
             out.push(format!(
-                "GitHub Releases: klockky/spotiya v{}",
+                "GitHub Releases: shyxep/spotiya v{}",
                 env!("CARGO_PKG_VERSION")
             ));
         }

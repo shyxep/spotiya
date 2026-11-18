@@ -90,7 +90,7 @@ download() {
 }
 
 SPOTIYA_ASSET=spotiya-armv7-linux-gnueabihf.tar.gz
-SPOTIYA_RELEASE=https://github.com/klockky/spotiya/releases/latest/download
+SPOTIYA_RELEASE=https://github.com/shyxep/spotiya/releases/latest/download
 echo 'Downloading the latest stable Spotiya from GitHub over HTTPS...'
 download "$SPOTIYA_RELEASE/SHA256SUMS" "$SPOTIYA_WORK/SHA256SUMS"
 download "$SPOTIYA_RELEASE/$SPOTIYA_ASSET" "$SPOTIYA_WORK/$SPOTIYA_ASSET"

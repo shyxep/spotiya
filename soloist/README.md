@@ -164,3 +164,41 @@ API слушает только `127.0.0.1`, порт выбирает ОС. П�
 Источники: [установка](https://developer.spotify.com/documentation/soloist/tutorials/getting-started),
 [CLI](https://developer.spotify.com/documentation/soloist/reference/command-line),
 [WebSocket API](https://developer.spotify.com/documentation/soloist/reference/websocket-api).
+
+## Станция Мини 1 (YNDX-0004)
+
+В этом форке Soloist работает на Мини 1: звук, громкость с телефона и голосом, много треков подряд без остановок,
+без щелчка при старте. Всё нужное для Мини 1 лежит в пакете совместимости отдельно, в `mini1/`, и подключается
+только при профиле `mini1` (`run.sh` смотрит `SPOTIYA_PROFILE`); на других колонках ничего не меняется.
+Проверено только на Мини 1 (ядро 4.9.68, userspace ARMv7 hf, glibc 2.23, ALSA `AML-AUGESOUND`, Soloist 1.3.10.x).
+
+Установка (SSH на колонку, как для других дополнений):
+
+```sh
+spotiya addon install soloist
+spotiya backend soloist
+spotiya restart
+```
+
+Если Soloist уже ставили руками в `/data/opt/solo`, установка заменит файлы. Профиль `mini1` выбирается автоматически,
+проверить можно командой `spotiya --profile-info`. Когда Soloist падает с `Pipewire initialization failed` и
+`playback_error_audio_driver`, это п. 1 ниже: нет нужных библиотек.
+
+Что исправлено (подробное описание с причинами — [klockky/spotiya#13](https://github.com/klockky/spotiya/issues/13)):
+
+| № | Симптом | Чем исправлено | Где |
+|---|---------|----------------|-----|
+| 1 | Звука нет, трек встаёт на паузу | `libglib-2.0.so.0` и `libpcre.so.3` для apulse | `mini1/` |
+| 2 | Ошибка про `__ldexp`/`__frexp` | прокладка `libldexp.so` подставляет функции под нужными именами | `shim.c` |
+| 3 | Soloist падает, когда должна пойти музыка | та же прокладка вызывает новую версию `snd_pcm_hw_params_set_rate_near`; вывод через микшер `dmixer_auto` | `shim.c`, `run.sh` |
+| 4 | Ползунок громкости ничего не меняет | `SPOTIYA_SOLOIST_HARDWARE_VOLUME=0`: громкость убавляет apulse | `run.sh` |
+| 5 | При переключении слышен хвост прежнего трека | `pa_stream_flush` сбрасывает кольцевой буфер | `apulse-spotiya.patch` |
+| 6 | Трек доиграл, следующий не начался | `read_index` не учитывает досыпанную тишину | `apulse-spotiya.patch` |
+| 7 | `/tmp/messages` забит дампами `syscall 403` | `exception-trace` выключается в `run.sh` | `run.sh` |
+| 8 | Щелчок при первом запуске музыки | прокладка заполняет тишиной кадры, которые модуль `samplerate` оставляет незаполненными | `shim.c` (`SRC_FIX`) |
+
+Кроме того, spotiya на Мини 1 синхронизирует громкость с Алисой (`SPOTIYA_ALICE_VOLUME=0` отключает) и держит кеш
+Soloist не больше 20 МБ: весь раздел `/data` на колонке около 89 МБ.
+
+Исходники прокладки — `soloist/shim.c` и `soloist/fade.h`; собирается в `build.py` кросс-компилятором из `scripts/bootstrap-arm.sh`.
+Ошибка п. 8 находится в `rate/rate_samplerate.c` пакета alsa-plugins (есть и в master), прокладка лишь обходит её.

@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub(crate) const REPO: &str = "klockky/spotiya";
+pub(crate) const REPO: &str = "shyxep/spotiya";
 const MAX_ARCHIVE: u64 = 16 * 1024 * 1024;
 const MAX_EXPANDED: u64 = 32 * 1024 * 1024;
 

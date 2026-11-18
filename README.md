@@ -1,10 +1,19 @@
 # spotiya
 
-[![Build and test](https://github.com/klockky/spotiya/actions/workflows/ci.yml/badge.svg)](https://github.com/klockky/spotiya/actions/workflows/ci.yml)
+[![Build and test](https://github.com/shyxep/spotiya/actions/workflows/ci.yml/badge.svg)](https://github.com/shyxep/spotiya/actions/workflows/ci.yml)
 
 Spotify Connect для Яндекс Станций: музыка, голосовое управление и TUI в одном
 интерфейсе на Rust. Для Spotify используется официальный
 [Spotify Soloist](https://github.com/spotify/soloist), установленный отдельным дополнением.
+
+> [!NOTE]
+> **Это форк [klockky/spotiya](https://github.com/klockky/spotiya) с исправлениями для Яндекс Станции Мини 1
+> (YNDX-0004).** В оригинале Soloist на Мини 1 не запускается: нет библиотек для apulse, звук идёт в «пустое»
+> устройство, трек встаёт на паузу через ~250 мс. Здесь это исправлено, и `spotiya addon install soloist`
+> ставит всё нужное сам. Что именно исправлено и как установить —
+> [soloist/README.md](soloist/README.md#станция-мини-1-yndx-0004).
+> Описание проблем для автора оригинала: [klockky/spotiya#13](https://github.com/klockky/spotiya/issues/13).
+> На Мини 2 и других колонках поведение не меняется.
 
 > [!IMPORTANT]
 > Интеграция Soloist экспериментальная; проверена на Мини 2.
@@ -62,11 +71,11 @@ spotiya restart
 **вместе со скобками**, и нажмите Enter:
 
 ```sh
-(set -e; d=$(mktemp -d /tmp/spotiya.XXXXXX); trap 'rm -rf "$d"' EXIT; cd "$d"; echo 'Downloading Spotiya...'; get() { LD_LIBRARY_PATH=/system/vendor/quasar/libs /system/vendor/quasar/maind --gst-launch "souphttpsrc location=https://github.com/klockky/spotiya/releases/latest/download/$1 ssl-strict=true ssl-ca-file=/etc/ssl/certs/ca-certificates.crt iradio-mode=false timeout=15 retries=1 ! filesink location=$1" >log 2>&1 && grep -Fq 'EOS: end of stream' log && ! grep -Fq 'ERROR from ' log && [ -s "$1" ]; }; get INSTALL_SHA256SUMS && get install.sh || { echo 'Installer download failed.' >&2; exit 1; }; [ "$(wc -l <INSTALL_SHA256SUMS)" -eq 1 ] && grep -Eqx '[0-9a-f]{64}  install\.sh' INSTALL_SHA256SUMS && sha256sum -c INSTALL_SHA256SUMS || { echo 'Installer checksum mismatch.' >&2; exit 1; }; sh install.sh)
+(set -e; d=$(mktemp -d /tmp/spotiya.XXXXXX); trap 'rm -rf "$d"' EXIT; cd "$d"; echo 'Downloading Spotiya...'; get() { LD_LIBRARY_PATH=/system/vendor/quasar/libs /system/vendor/quasar/maind --gst-launch "souphttpsrc location=https://github.com/shyxep/spotiya/releases/latest/download/$1 ssl-strict=true ssl-ca-file=/etc/ssl/certs/ca-certificates.crt iradio-mode=false timeout=15 retries=1 ! filesink location=$1" >log 2>&1 && grep -Fq 'EOS: end of stream' log && ! grep -Fq 'ERROR from ' log && [ -s "$1" ]; }; get INSTALL_SHA256SUMS && get install.sh || { echo 'Installer download failed.' >&2; exit 1; }; [ "$(wc -l <INSTALL_SHA256SUMS)" -eq 1 ] && grep -Eqx '[0-9a-f]{64}  install\.sh' INSTALL_SHA256SUMS && sha256sum -c INSTALL_SHA256SUMS || { echo 'Installer checksum mismatch.' >&2; exit 1; }; sh install.sh)
 ```
 
 Команда открывает интерактивное меню: установка или обновление до последнего
-стабильного [релиза GitHub](https://github.com/klockky/spotiya/releases/latest),
+стабильного [релиза GitHub](https://github.com/shyxep/spotiya/releases/latest),
 проверка совместимости без установки и полное удаление. Выберите пункт цифрой
 и нажмите Enter; Enter без выбора или конец ввода отменяет действие.
 При установке и обновлении вход в аккаунт, настройки, профили и дополнения
@@ -145,8 +154,8 @@ spotiya uninstall
 
 ### Через ПК
 
-Готовые ARMv7-сборки доступны в [GitHub Releases](https://github.com/klockky/spotiya/releases)
-и [артефактах Actions](https://github.com/klockky/spotiya/actions/workflows/ci.yml).
+Готовые ARMv7-сборки доступны в [GitHub Releases](https://github.com/shyxep/spotiya/releases)
+и [артефактах Actions](https://github.com/shyxep/spotiya/actions/workflows/ci.yml).
 
 На ПК распакуй архив и передай каталог на колонку:
 

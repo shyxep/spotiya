@@ -59,7 +59,7 @@ parts = shlex.split(sys.argv[2])
 assert "ssl-strict=true" in parts
 assert any(p.startswith("ssl-ca-file=") for p in parts)
 locations = [p.removeprefix("location=") for p in parts if p.startswith("location=")]
-assert locations[0].startswith("https://github.com/klockky/spotiya/releases/latest/download/")
+assert locations[0].startswith("https://github.com/shyxep/spotiya/releases/latest/download/")
 if os.environ.get("TEST_DOWNLOAD_ERROR") == "1":
     pathlib.Path(locations[1]).write_text('echo unexpected > "$TEST_MARKER"\n')
     print("ERROR from souphttpsrc0: TLS failure")
