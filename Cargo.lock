@@ -2614,6 +2614,7 @@ dependencies = [
  "log",
  "oauth2",
  "reqwest",
+ "rustls 0.23.46",
  "ruzstd",
  "serde",
  "serde_json",

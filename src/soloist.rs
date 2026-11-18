@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     process::{Child, Command},
@@ -23,6 +23,8 @@ use tokio_tungstenite::{
 };
 
 const LEVELS: &str = "/run/spotiya-soloist-levels";
+// Soloist accepts no cache limit under 100 MB, more than the whole /data of a Mini 1.
+const CACHE_LIMIT: u64 = 20 * 1024 * 1024;
 
 pub fn receive_levels(
     gate: Arc<crate::airplay::Gate>,
@@ -329,10 +331,11 @@ pub fn store_key(state: &Path, key: &str) -> io::Result<()> {
     result
 }
 pub fn spawn(
-    base: PathBuf,
+    _base: PathBuf,
     state: PathBuf,
     name: String,
     gate: Arc<crate::airplay::Gate>,
+    initial_volume: Option<u16>,
 ) -> (Handle, tokio::task::JoinHandle<()>, watch::Receiver<State>) {
     let (tx, rx) = mpsc::channel(16);
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -343,7 +346,7 @@ pub fn spawn(
         state: state_rx.clone(),
     };
     let task = tokio::spawn(async move {
-        let result = worker(&base, &state, &name, rx, stop_rx, &events, &gate).await;
+        let result = worker(&state, &name, initial_volume, rx, stop_rx, &events, &gate).await;
         gate.close_spotify();
         let error = result
             .err()
@@ -373,9 +376,9 @@ async fn stop_child(child: &mut Child) {
     }
 }
 async fn worker(
-    _base: &Path,
     state_dir: &Path,
     name: &str,
+    initial_volume: Option<u16>,
     mut commands: mpsc::Receiver<Request>,
     mut stop: watch::Receiver<bool>,
     events: &watch::Sender<State>,
@@ -403,6 +406,7 @@ async fn worker(
     let cache = dir.join("cache");
     fs::create_dir_all(&data)?;
     fs::create_dir_all(&cache)?;
+    trim_cache(&cache, CACHE_LIMIT);
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
     for file in ["ws.addr", "ws.port"] {
         match fs::remove_file(data.join(file)) {
@@ -430,6 +434,12 @@ async fn worker(
     .arg(&data)
     .arg("--cache-dir")
     .arg(&cache)
+    .args(
+        initial_volume
+            .map(|volume| ["--initial-volume".to_owned(), volume.min(100).to_string()])
+            .into_iter()
+            .flatten(),
+    )
     .env("MALLOC_ARENA_MAX", "1")
     .env("SPOTIYA_SOLOIST_LEVELS", LEVELS)
     .env(
@@ -488,13 +498,48 @@ async fn worker(
                 _=tick.tick()=>{
                     if seen.elapsed()>Duration::from_secs(30) {return Err(io::Error::other("Local API timed out"));}
                     tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Ping(Vec::new().into()))).await.map_err(io::Error::other)?.map_err(io::Error::other)?;
-                    if trimmed.elapsed()>=Duration::from_secs(30) {let _=crate::supervisor::trim_log(log);trimmed=Instant::now();}
+                    if trimmed.elapsed()>=Duration::from_secs(30) {let _=crate::supervisor::trim_log(log);trim_cache(&cache,CACHE_LIMIT);trimmed=Instant::now();}
                 }
             }
         }
     }.await;
     stop_child(&mut child).await;
     result
+}
+/// Deletes the oldest cached audio files until the cache fits `limit`. The newest file,
+/// possibly still being written, is kept; Soloist downloads a missing file again.
+fn trim_cache(cache: &Path, limit: u64) {
+    let mut files = Vec::new();
+    cache_files(cache, 0, &mut files);
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    if total <= limit {
+        return;
+    }
+    files.sort_by_key(|(modified, _, _)| *modified);
+    files.pop();
+    for (_, size, path) in files {
+        if total <= limit {
+            break;
+        }
+        if fs::remove_file(&path).is_ok() {
+            total -= size;
+        }
+    }
+}
+fn cache_files(dir: &Path, depth: u8, out: &mut Vec<(SystemTime, u64, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let (Ok(meta), path) = (entry.metadata(), entry.path()) else {
+            continue;
+        };
+        if meta.is_dir() && depth < 2 {
+            cache_files(&path, depth + 1, out);
+        } else if meta.is_file() && path.extension().is_some_and(|e| e == "file") {
+            out.push((meta.modified().unwrap_or(UNIX_EPOCH), meta.len(), path));
+        }
+    }
 }
 fn exit_error(code: Option<i32>) -> io::Error {
     io::Error::other(if code == Some(10) {
@@ -507,6 +552,30 @@ fn exit_error(code: Option<i32>) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cache_trim_drops_oldest_audio_and_keeps_newest() {
+        let root = std::env::temp_dir().join(format!("spotiya-cache-{}", std::process::id()));
+        let audio = root.join("cache/ab");
+        fs::create_dir_all(&audio).unwrap();
+        let now = SystemTime::now();
+        for (name, age) in [
+            ("old.file", 30),
+            ("mid.file", 20),
+            ("new.file", 10),
+            ("index", 40),
+        ] {
+            let file = fs::File::create(audio.join(name)).unwrap();
+            file.set_len(6).unwrap();
+            file.set_modified(now - Duration::from_secs(age)).unwrap();
+        }
+        trim_cache(&root, 10);
+        let left = |name: &str| audio.join(name).exists();
+        assert!(!left("old.file") && !left("mid.file"));
+        assert!(left("new.file") && left("index"));
+        trim_cache(&root, 0);
+        assert!(left("new.file"));
+        fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn spectrum_accepts_only_valid_levels_from_active_spotify() {
         let gate = crate::airplay::Gate::new();
@@ -570,6 +639,7 @@ mod tests {
             root,
             "test".into(),
             Arc::new(crate::airplay::Gate::new()),
+            None,
         );
         task.await.unwrap();
         assert!(!state.borrow().connected);

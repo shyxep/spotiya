@@ -220,14 +220,14 @@ fn field(data: &[u8], wanted: u64) -> Option<Value<'_>> {
     }
     None
 }
-fn bytes(data: &[u8], number: u64) -> Option<&[u8]> {
+pub(crate) fn bytes(data: &[u8], number: u64) -> Option<&[u8]> {
     if let Value::Bytes(v) = field(data, number)? {
         Some(v)
     } else {
         None
     }
 }
-fn number(data: &[u8], field_number: u64) -> Option<u64> {
+pub(crate) fn number(data: &[u8], field_number: u64) -> Option<u64> {
     if let Value::Number(v) = field(data, field_number)? {
         Some(v)
     } else {

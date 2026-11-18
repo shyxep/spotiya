@@ -34,6 +34,7 @@ use tokio::{
 };
 mod addons;
 mod airplay;
+mod alice_volume;
 mod animations;
 mod audio_guard;
 mod auth;
@@ -83,6 +84,7 @@ struct Shared {
     spectrum: Arc<spectrum::Spectrum>,
     airplay: Arc<airplay::Gate>,
     ducking: Arc<ducking::Ducking>,
+    alice: Arc<alice_volume::AliceVolume>,
 }
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
 
@@ -153,6 +155,11 @@ pub extern "C" fn mini2_receiver_command(action: i32) -> i32 {
     // A command that misses this deadline is dropped by the receiver, not run late.
     response.recv_timeout(timeout).unwrap_or(false) as i32
 }
+// Soloist starts at its own default (40%) unless told Alice's level, which it would then overwrite.
+fn soloist_volume(shared: &Shared) -> Option<u16> {
+    let volume = shared.volume.load(Ordering::Acquire);
+    shared.alice.enabled().then(|| percent(volume))
+}
 fn percent(volume: u16) -> u16 {
     ((u32::from(volume) * 100 + 32767) / 65535) as u16
 }
@@ -219,6 +226,12 @@ impl DeviceMixer {
         })
     }
     fn set_master_volume(&self, value: u16) {
+        if self.shared.alice.enabled() {
+            // Alice sets Master by her own curve along with her level.
+            self.shared.volume.store(value, Ordering::Release);
+            self.shared.alice.request(percent(value));
+            return;
+        }
         if value != self.shared.volume.load(Ordering::Acquire) {
             self.shared.ducking.volume.spotify_command();
         }
@@ -247,7 +260,7 @@ impl Mixer for DeviceMixer {
         })
     }
     fn volume(&self) -> u16 {
-        if self.shared.ducking.volume.holding() {
+        if self.shared.alice.enabled() || self.shared.ducking.volume.holding() {
             return self.shared.volume.load(Ordering::Acquire);
         }
         self.read()
@@ -845,6 +858,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         spectrum: Arc::new(spectrum::Spectrum::new(spectrum_enabled)),
         airplay: Arc::new(airplay::Gate::new()),
         ducking: Arc::new(ducking::Ducking::new()),
+        alice: alice_volume::AliceVolume::start(is_soloist && profile.id == "mini1"),
     });
     let _ = SHARED.set(shared.clone());
     let mixer = Arc::new(DeviceMixer {
@@ -858,6 +872,10 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             profile.audio.mixer_control, profile.audio.mixer_device
         ))
     })?;
+    let initial = match alice_volume::level().filter(|_| shared.alice.enabled()) {
+        Some(level) => from_percent(level),
+        None => initial,
+    };
     shared.volume.store(initial, Ordering::Relaxed);
     let mut session = Session::new(config.clone(), Some(cache.clone()));
     let player_config = PlayerConfig {
@@ -1022,6 +1040,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             options.state_dir.clone(),
             options.name.clone(),
             shared.airplay.clone(),
+            soloist_volume(&shared),
         );
         spirc = Some(Handle::Soloist(handle));
         (Some(task), Some(state))
@@ -1310,7 +1329,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     voice::Intent::Retry if is_soloist=>{
                         if let Some(handle)=spirc.take(){let _=handle.shutdown();}
                         if let Some(task)=soloist_task.take(){let _=task.await;}
-                        let (handle,task,state)=soloist::spawn(base.clone(),options.state_dir.clone(),options.name.clone(),shared.airplay.clone());
+                        let (handle,task,state)=soloist::spawn(base.clone(),options.state_dir.clone(),options.name.clone(),shared.airplay.clone(),soloist_volume(&shared));
                         spirc=Some(Handle::Soloist(handle));soloist_task=Some(task);soloist_state=Some(state);
                         soloist_error.clear();soloist_volume_revision=0;soloist_connected=false;playback.reset();continue;
                     },
@@ -1434,7 +1453,13 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let guard=&shared.ducking.volume;
                 guard.set_enabled(playback.active() || shared.airplay.active.load(Ordering::Acquire));guard.activity(shared.ducking.active());
-                if let Ok(value)=mixer.read() {
+                if shared.alice.enabled() {
+                    // Master follows Alice's curve here; her stored level is what Spotify mirrors.
+                    if let Some(level)=shared.alice.changed_by_alice() {
+                        shared.volume.store(from_percent(level),Ordering::Release);
+                        if shared.active.load(Ordering::Acquire) && let Some(handle)=spirc.as_ref() {let _=handle.set_volume(from_percent(level));}
+                    }
+                } else if let Ok(value)=mixer.read() {
                     if guard.holding() {
                         let desired=shared.volume.load(Ordering::Acquire);
                         if let Some(target)=guard.restore_target(value,desired)
@@ -1547,6 +1572,7 @@ mod tests {
             spectrum: Arc::new(spectrum::Spectrum::new(false)),
             airplay: Arc::new(airplay::Gate::new()),
             ducking: Arc::new(ducking::Ducking::new()),
+            alice: alice_volume::AliceVolume::disabled(),
         };
         let (playback, failures) = (playback::Playback::default(), recovery::Failures::default());
         let mut info = control::Status::default();
@@ -1604,6 +1630,7 @@ mod tests {
             spectrum: Arc::new(spectrum::Spectrum::new(false)),
             airplay: Arc::new(airplay::Gate::new()),
             ducking: Arc::new(ducking::Ducking::new()),
+            alice: alice_volume::AliceVolume::disabled(),
         });
         assert!(SHARED.set(shared.clone()).is_ok());
         assert_eq!(mini2_receiver_command(0), 0);
