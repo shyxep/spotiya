@@ -172,17 +172,49 @@ API слушает только `127.0.0.1`, порт выбирает ОС. П�
 только при профиле `mini1` (`run.sh` смотрит `SPOTIYA_PROFILE`); на других колонках ничего не меняется.
 Проверено только на Мини 1 (ядро 4.9.68, userspace ARMv7 hf, glibc 2.23, ALSA `AML-AUGESOUND`, Soloist 1.3.10.x).
 
-Установка (SSH на колонку, как для других дополнений):
+### Установка на Мини 1
+
+Нужны root-доступ по SSH (плагин Alice Homebrew), Spotify Premium и API-ключ Soloist из
+[Spotify for Developers](https://developer.spotify.com/dashboard/soloist). Все команды выполняются **на колонке**.
+Ставить нужно spotiya из этого форка: оригинальный spotiya берёт обновления и пакет Soloist из `klockky/spotiya`, где
+Мини 1 пока не поддерживается.
+
+**Шаг 1. Spotiya из форка.**
+
+- Spotiya ещё не стоит: «Быстрая установка и обновление» в [основном README](../README.md#быстрая-установка-и-обновление),
+  пункт установки.
+- Уже стоит оригинальный spotiya: его `--update` смотрит в релизы оригинала, поэтому ту же быструю команду использовать
+  нельзя. Поставьте релиз форка этой строкой (вставьте целиком, вместе со скобками). Вход в аккаунт и настройки
+  сохраняются:
 
 ```sh
+(set -e; d=$(mktemp -d /tmp/spotiya.XXXXXX); trap 'rm -rf "$d"' EXIT; cd "$d"; get() { LD_LIBRARY_PATH=/system/vendor/quasar/libs /system/vendor/quasar/maind --gst-launch "souphttpsrc location=https://github.com/shyxep/spotiya/releases/latest/download/$1 ssl-strict=true ssl-ca-file=/etc/ssl/certs/ca-certificates.crt iradio-mode=false timeout=15 retries=1 ! filesink location=$1" >log 2>&1 && grep -Fq 'EOS: end of stream' log && ! grep -Fq 'ERROR from ' log && [ -s "$1" ]; }; get SHA256SUMS && get spotiya-armv7-linux-gnueabihf.tar.gz || { echo 'Download failed.' >&2; exit 1; }; spotiya stop; spotiya update file spotiya-armv7-linux-gnueabihf.tar.gz SHA256SUMS; spotiya start)
+```
+
+**Шаг 2. Soloist.**
+
+```sh
+spotiya stop
+spotiya addon remove soloist     # только если Soloist уже стоял; ключ и данные входа остаются
 spotiya addon install soloist
 spotiya backend soloist
 spotiya restart
 ```
 
-Если Soloist уже ставили руками в `/data/opt/solo`, установка заменит файлы. Профиль `mini1` выбирается автоматически,
-проверить можно командой `spotiya --profile-info`. Когда Soloist падает с `Pipewire initialization failed` и
-`playback_error_audio_driver`, это п. 1 ниже: нет нужных библиотек.
+Установка запросит API-ключ (ввод скрыт). Если ключ уже был сохранён, повторно он не спрашивается. Профиль `mini1`
+выбирается автоматически (`spotiya --profile-info`).
+
+Зачем `addon remove` перед установкой: на `/data` всего около 89 МБ, а замена Soloist требует места под обе копии
+(по ~31 МБ). Если установка пишет `Not enough disk space`, посмотрите `df -h /data`, удалите старый Soloist (как выше) и
+кеш Soloist: `find /data/opt/spotify-connect/receiver-state/soloist/cache -type f -name '*.file' -exec rm {} \;`
+(spotiya создаст его заново). Свободно должно быть не меньше 15 МБ.
+
+**Шаг 3. Проверка.** `spotiya status` показывает `"profile":"mini1"`, `"connected":true` и пустой `error`. Выберите колонку
+в Spotify Connect в приложении Spotify. Первый раз держите громкость низкой (`spotiya volume 15`).
+
+Откат: перед каждой заменой установщик spotiya сохраняет снимок в `/data/opt/spotify-connect/backups/` (около 5 МБ
+каждый; старые можно удалять, когда не хватает места). Если Soloist падает с `Pipewire initialization failed` и
+`playback_error_audio_driver`, это п. 1 ниже: нет нужных библиотек. В форке их ставит пакет `mini1/`.
 
 Что исправлено (подробное описание с причинами — [klockky/spotiya#13](https://github.com/klockky/spotiya/issues/13)):
 
