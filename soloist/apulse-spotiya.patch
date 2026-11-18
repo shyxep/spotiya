@@ -1,77 +1,24 @@
---- a/src/apulse.h
-+++ b/src/apulse.h
-@@ -92,6 +92,7 @@
- };
- 
- struct pa_stream {
-+    struct spotiya_spectrum *spotiya_spectrum;
-     pa_context *c;
-     pa_stream_state_t state;
-     pa_stream_direction_t direction;
---- a/src/apulse-stream.c
-+++ b/src/apulse-stream.c
-@@ -25,6 +25,7 @@
- #include "apulse.h"
- #include "trace.h"
- #include "util.h"
-+#include "apulse-spectrum.h"
- 
- #define MAKE_SND_LIB_VERSION(a, b, c) (((a) << 16) | ((b) << 8) | (c))
- 
-@@ -172,6 +173,7 @@
- 
-     if (events & PA_IO_EVENT_OUTPUT) {
-         if (paused) {
-+            spotiya_spectrum_reset(s->spotiya_spectrum);
-             // client stream is corked. Pass silence to ALSA
-             size_t bytecnt = MIN(buf_size, frame_count * frame_size);
-             memset(buf, 0, bytecnt);
-@@ -187,14 +189,19 @@
-             size_t bytecnt = MIN(buf_size, frame_count * frame_size);
-             bytecnt = ringbuffer_read(s->rb, buf, bytecnt);
- 
--            pa_apply_volume_multiplier(buf, bytecnt, s->volume, &s->ss);
-+            const char *hardware_volume = getenv("SPOTIYA_SOLOIST_HARDWARE_VOLUME");
-+            if (!hardware_volume || strcmp(hardware_volume, "1") != 0)
-+                pa_apply_volume_multiplier(buf, bytecnt, s->volume, &s->ss);
- 
-             if (bytecnt == 0) {
-                 // application is not ready yet, play silence
-                 bytecnt = MIN(buf_size, frame_count * frame_size);
-                 memset(buf, 0, bytecnt);
-             }
--            snd_pcm_writei(s->ph, buf, bytecnt / frame_size);
-+            snd_pcm_sframes_t written = snd_pcm_writei(s->ph, buf, bytecnt / frame_size);
-+            if (written > 0 && (s->ss.format == PA_SAMPLE_FLOAT32LE || s->ss.format == PA_SAMPLE_S16LE))
-+                spotiya_spectrum_feed(s->spotiya_spectrum, buf, written,
-+                    s->ss.format == PA_SAMPLE_FLOAT32LE ? SPOTIYA_FLOAT32 : SPOTIYA_S16);
-         }
+--- a/src/apulse-context.c	2026-11-10 09:32:22.177744342 +0100
++++ b/src/apulse-context.c	2026-11-11 20:50:51.234453627 +0100
+@@ -454,7 +454,7 @@
+     pa_stream *s = g_hash_table_lookup(op->c->streams_ht, GINT_TO_POINTER(idx));
+     if (!s) {
+         trace_error("%s, no such stream: %u\n", __func__, idx);
+-        pa_operation_cancel(op);
++        pa_operation_done(op);
+         return;
      }
  
-@@ -878,10 +885,11 @@
-     g_free(s_map);
+@@ -604,6 +604,7 @@
+         if (op->context_success_cb)
+             op->context_success_cb(op->c, 0, op->cb_userdata);
  
-     pa_stream *s = calloc(1, sizeof(pa_stream));
--    s->c = c;
-+    s->c = pa_context_ref(c);
-     s->ref_cnt = 1;
-     s->state = PA_STREAM_UNCONNECTED;
-     s->ss = *ss;
-+    s->spotiya_spectrum = spotiya_spectrum_new(ss->rate, ss->channels);
++        pa_operation_done(op);
+         return;
+     }
  
-     s->idx = c->next_stream_idx++;
-     g_hash_table_insert(c->streams_ht, GINT_TO_POINTER(s->idx), s);
-@@ -1020,6 +1028,8 @@
-     s->ref_cnt--;
-     if (s->ref_cnt == 0) {
-         g_hash_table_remove(s->c->streams_ht, GINT_TO_POINTER(s->idx));
-+        pa_context_unref(s->c);
-+        spotiya_spectrum_free(s->spotiya_spectrum);
-         ringbuffer_free(s->rb);
-         free(s->peek_buffer);
-         free(s->write_buffer);
---- a/src/apulse-operation.c
-+++ b/src/apulse-operation.c
+--- a/src/apulse-operation.c	2026-11-10 09:32:22.177744342 +0100
++++ b/src/apulse-operation.c	2026-11-11 20:50:51.234355077 +0100
 @@ -29,7 +29,10 @@
  deh_perform_operation(pa_mainloop_api *api, pa_defer_event *de, void *userdata)
  {
@@ -120,22 +67,160 @@
  }
  
  APULSE_EXPORT
---- a/src/apulse-context.c
-+++ b/src/apulse-context.c
-@@ -454,7 +454,7 @@
-     pa_stream *s = g_hash_table_lookup(op->c->streams_ht, GINT_TO_POINTER(idx));
-     if (!s) {
-         trace_error("%s, no such stream: %u\n", __func__, idx);
--        pa_operation_cancel(op);
-+        pa_operation_done(op);
-         return;
+--- a/src/apulse-stream.c	2026-11-10 09:32:22.177744342 +0100
++++ b/src/apulse-stream.c	2026-11-11 20:52:13.979419586 +0100
+@@ -23,8 +23,11 @@
+  */
+ 
+ #include "apulse.h"
++#include <stdio.h>
++#include <time.h>
+ #include "trace.h"
+ #include "util.h"
++#include "apulse-spectrum.h"
+ 
+ #define MAKE_SND_LIB_VERSION(a, b, c) (((a) << 16) | ((b) << 8) | (c))
+ 
+@@ -172,10 +175,13 @@
+ 
+     if (events & PA_IO_EVENT_OUTPUT) {
+         if (paused) {
++            spotiya_spectrum_reset(s->spotiya_spectrum);
+             // client stream is corked. Pass silence to ALSA
+             size_t bytecnt = MIN(buf_size, frame_count * frame_size);
+             memset(buf, 0, bytecnt);
+-            snd_pcm_writei(s->ph, buf, bytecnt / frame_size);
++            snd_pcm_sframes_t padded = snd_pcm_writei(s->ph, buf, bytecnt / frame_size);
++            if (padded > 0)
++                s->silence_tail += padded;
+         } else {
+             size_t writable_size = pa_stream_writable_size(s);
+ 
+@@ -187,14 +193,23 @@
+             size_t bytecnt = MIN(buf_size, frame_count * frame_size);
+             bytecnt = ringbuffer_read(s->rb, buf, bytecnt);
+ 
+-            pa_apply_volume_multiplier(buf, bytecnt, s->volume, &s->ss);
++            const char *hardware_volume = getenv("SPOTIYA_SOLOIST_HARDWARE_VOLUME");
++            if (!hardware_volume || strcmp(hardware_volume, "1") != 0)
++                pa_apply_volume_multiplier(buf, bytecnt, s->volume, &s->ss);
+ 
++            int silence = 0;
+             if (bytecnt == 0) {
+                 // application is not ready yet, play silence
+                 bytecnt = MIN(buf_size, frame_count * frame_size);
+                 memset(buf, 0, bytecnt);
++                silence = 1;
+             }
+-            snd_pcm_writei(s->ph, buf, bytecnt / frame_size);
++            snd_pcm_sframes_t written = snd_pcm_writei(s->ph, buf, bytecnt / frame_size);
++            if (written > 0)
++                s->silence_tail = silence ? s->silence_tail + (int)written : 0;
++            if (written > 0 && (s->ss.format == PA_SAMPLE_FLOAT32LE || s->ss.format == PA_SAMPLE_S16LE))
++                spotiya_spectrum_feed(s->spotiya_spectrum, buf, written,
++                    s->ss.format == PA_SAMPLE_FLOAT32LE ? SPOTIYA_FLOAT32 : SPOTIYA_S16);
+         }
      }
  
-@@ -604,6 +604,7 @@
-         if (op->context_success_cb)
-             op->context_success_cb(op->c, 0, op->cb_userdata);
+@@ -691,7 +706,10 @@
+ static void
+ pa_stream_flush_impl(pa_operation *op)
+ {
+-    // TODO: is it ok to do nothing?
++    // Drop queued playback as PulseAudio does. A corked stream feeds ALSA silence and keeps
++    // the ring buffer, so players that cork and flush on seek or track change would
++    // otherwise replay the old tail after uncorking.
++    ringbuffer_drop(op->s->rb, ringbuffer_readable_size(op->s->rb));
  
-+        pa_operation_done(op);
-         return;
-     }
+     if (op->stream_success_cb)
+         op->stream_success_cb(op->s, 1, op->cb_userdata);
+@@ -785,8 +803,38 @@
+ 
+     if (snd_pcm_delay(s->ph, &delay) < 0)
+         delay = 0;
+-    s->timing_info.read_index =
+-        s->timing_info.write_index - delay * pa_frame_size(&s->ss);
++    // Played position = written minus audio not yet heard: the apulse ring buffer plus the
++    // real (non-padding) frames in ALSA. Counting the silence padding apulse queues after the
++    // last real frame kept read_index ~one ALSA buffer behind forever once a track ended, so
++    // players waiting for the end of stream (Soloist) could stall between tracks.
++    const size_t frame_size = pa_frame_size(&s->ss);
++    const int64_t legacy = s->timing_info.write_index - (int64_t)delay * frame_size;
++    const size_t queued = ringbuffer_readable_size(s->rb);
++    snd_pcm_sframes_t pending = delay - s->silence_tail;
++    if (pending < 0)
++        pending = 0;
++    int64_t fixed = s->timing_info.write_index - (int64_t)queued - (int64_t)pending * frame_size;
++    if (fixed < 0)
++        fixed = 0;
++    const char *fix_env = getenv("APULSE_TIMING_FIX");
++    const int fix = !fix_env || strcmp(fix_env, "0") != 0;
++    s->timing_info.read_index = fix ? fixed : legacy;
++
++    const char *log_env = getenv("APULSE_TIMING_LOG");
++    if (log_env && strcmp(log_env, "1") == 0 && queued == 0) {
++        static int64_t last_ms;
++        struct timespec ts;
++        clock_gettime(CLOCK_REALTIME, &ts);
++        const int64_t now_ms = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++        if (now_ms - last_ms >= 200) {
++            last_ms = now_ms;
++            fprintf(stderr,
++                "[timing] %lld.%03lld w=%lld delay=%ld tail=%d legacy=%lld fixed=%lld fix=%d\n",
++                (long long)(now_ms / 1000), (long long)(now_ms % 1000),
++                (long long)s->timing_info.write_index, (long)delay, s->silence_tail,
++                (long long)legacy, (long long)fixed, fix);
++        }
++    }
+ 
+     return &s->timing_info;
+ }
+@@ -878,10 +926,11 @@
+     g_free(s_map);
+ 
+     pa_stream *s = calloc(1, sizeof(pa_stream));
+-    s->c = c;
++    s->c = pa_context_ref(c);
+     s->ref_cnt = 1;
+     s->state = PA_STREAM_UNCONNECTED;
+     s->ss = *ss;
++    s->spotiya_spectrum = spotiya_spectrum_new(ss->rate, ss->channels);
+ 
+     s->idx = c->next_stream_idx++;
+     g_hash_table_insert(c->streams_ht, GINT_TO_POINTER(s->idx), s);
+@@ -900,6 +949,7 @@
+     s->timing_info.configured_sink_usec = 0;
+     s->timing_info.configured_source_usec = 0;
+     s->timing_info.since_underrun = 0;
++    s->silence_tail = 0;
+ 
+     s->rb = ringbuffer_new(72 * 1024);  // TODO: figure out size
+     s->peek_buffer = malloc(s->rb->end - s->rb->start);
+@@ -1020,6 +1070,8 @@
+     s->ref_cnt--;
+     if (s->ref_cnt == 0) {
+         g_hash_table_remove(s->c->streams_ht, GINT_TO_POINTER(s->idx));
++        pa_context_unref(s->c);
++        spotiya_spectrum_free(s->spotiya_spectrum);
+         ringbuffer_free(s->rb);
+         free(s->peek_buffer);
+         free(s->write_buffer);
+--- a/src/apulse.h	2026-11-10 09:32:22.177744342 +0100
++++ b/src/apulse.h	2026-11-11 20:51:35.395897083 +0100
+@@ -92,6 +92,7 @@
+ };
+ 
+ struct pa_stream {
++    struct spotiya_spectrum *spotiya_spectrum;
+     pa_context *c;
+     pa_stream_state_t state;
+     pa_stream_direction_t direction;
+@@ -117,6 +118,8 @@
+     size_t peek_buffer_data_len;
+     void *write_buffer;
+     volatile int paused;
++    // Frames of silence queued in ALSA after the last real audio (apulse pads with silence).
++    volatile int silence_tail;
+     pa_volume_t volume[PA_CHANNELS_MAX];
+ };
  
