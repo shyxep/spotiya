@@ -336,6 +336,7 @@ pub fn spawn(
     name: String,
     gate: Arc<crate::airplay::Gate>,
     initial_volume: Option<u16>,
+    profile: String,
 ) -> (Handle, tokio::task::JoinHandle<()>, watch::Receiver<State>) {
     let (tx, rx) = mpsc::channel(16);
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -346,7 +347,19 @@ pub fn spawn(
         state: state_rx.clone(),
     };
     let task = tokio::spawn(async move {
-        let result = worker(&state, &name, initial_volume, rx, stop_rx, &events, &gate).await;
+        let result = worker(
+            &state,
+            Launch {
+                name: &name,
+                initial_volume,
+                profile: &profile,
+            },
+            rx,
+            stop_rx,
+            &events,
+            &gate,
+        )
+        .await;
         gate.close_spotify();
         let error = result
             .err()
@@ -375,15 +388,26 @@ async fn stop_child(child: &mut Child) {
         let _ = child.kill().await;
     }
 }
+/// What the launcher needs besides the key: device name, starting volume and the profile id
+/// (`run.sh` applies Station Mini 1 settings when it is `mini1`).
+struct Launch<'a> {
+    name: &'a str,
+    initial_volume: Option<u16>,
+    profile: &'a str,
+}
 async fn worker(
     state_dir: &Path,
-    name: &str,
-    initial_volume: Option<u16>,
+    launch: Launch<'_>,
     mut commands: mpsc::Receiver<Request>,
     mut stop: watch::Receiver<bool>,
     events: &watch::Sender<State>,
     gate: &crate::airplay::Gate,
 ) -> io::Result<()> {
+    let Launch {
+        name,
+        initial_volume,
+        profile,
+    } = launch;
     let dir = state_dir.join("soloist");
     let key = fs::read_to_string(dir.join("api-key")).map_err(|_| {
         io::Error::other(
@@ -441,6 +465,7 @@ async fn worker(
             .flatten(),
     )
     .env("MALLOC_ARENA_MAX", "1")
+    .env("SPOTIYA_PROFILE", profile)
     .env("SPOTIYA_SOLOIST_LEVELS", LEVELS)
     .env(
         "SPOTIYA_SPECTRUM_SETTING",
@@ -640,6 +665,7 @@ mod tests {
             "test".into(),
             Arc::new(crate::airplay::Gate::new()),
             None,
+            "generic".into(),
         );
         task.await.unwrap();
         assert!(!state.borrow().connected);

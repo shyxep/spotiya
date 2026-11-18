@@ -11,6 +11,10 @@
     "url": "https://old-releases.ubuntu.com/ubuntu/pool/main/g/glib2.0/libglib2.0-dev_2.62.4-1~ubuntu19.10.2_armhf.deb",
     "sha256": "4f94c742a964bf7512cd39d64c35372f6f985da4b85ffcdb19cdb943912ba0c1"
   },
+  "libpcre3_8.39-12_armhf.deb": {
+    "url": "https://old-releases.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-12_armhf.deb",
+    "sha256": "f9791219e0b305b17efa662a19da84d524026b6d006493f2193dee523defa905"
+  },
   "apulse.tar.gz": {
     "url": "https://codeload.github.com/i-rinat/apulse/tar.gz/5d654cecd18474b4e0d885e774bc41fcbbc9818b",
     "sha256": "56608b90d1bf6637bb5011a4771aa33547ae0cbe4d2b10a01ebe6601db2f81e6"

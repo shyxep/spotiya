@@ -10,9 +10,12 @@ import tomllib
 
 RECIPE = Path(__file__).resolve().parent
 PROJECT = RECIPE.parent
+MINI1 = ('libglib-2.0.so.0', 'libpcre.so.3', 'libldexp.so')
 FILES = ['ld.so', *['lib/' + name for name in (
     'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0', 'librt.so.1',
     'libresolv.so.2', 'libnss_dns.so.2', 'libnss_files.so.2', 'libatomic.so.1', 'libpulse.so.0')],
+    # Station Mini 1 only (run.sh adds this directory when SPOTIYA_PROFILE=mini1).
+    *['mini1/' + name for name in MINI1],
     'run.sh', 'set-key.sh']
 
 

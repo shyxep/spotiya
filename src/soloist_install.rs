@@ -33,6 +33,9 @@ const REQUIRED: &[&str] = &[
     "lib/libnss_files.so.2",
     "lib/libatomic.so.1",
     "lib/libpulse.so.0",
+    "mini1/libglib-2.0.so.0",
+    "mini1/libpcre.so.3",
+    "mini1/libldexp.so",
     "run.sh",
     "set-key.sh",
 ];

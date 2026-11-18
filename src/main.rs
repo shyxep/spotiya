@@ -1041,6 +1041,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             options.name.clone(),
             shared.airplay.clone(),
             soloist_volume(&shared),
+            profile.id.clone(),
         );
         spirc = Some(Handle::Soloist(handle));
         (Some(task), Some(state))
@@ -1329,7 +1330,7 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                     voice::Intent::Retry if is_soloist=>{
                         if let Some(handle)=spirc.take(){let _=handle.shutdown();}
                         if let Some(task)=soloist_task.take(){let _=task.await;}
-                        let (handle,task,state)=soloist::spawn(base.clone(),options.state_dir.clone(),options.name.clone(),shared.airplay.clone(),soloist_volume(&shared));
+                        let (handle,task,state)=soloist::spawn(base.clone(),options.state_dir.clone(),options.name.clone(),shared.airplay.clone(),soloist_volume(&shared),profile.id.clone());
                         spirc=Some(Handle::Soloist(handle));soloist_task=Some(task);soloist_state=Some(state);
                         soloist_error.clear();soloist_volume_revision=0;soloist_connected=false;playback.reset();continue;
                     },
